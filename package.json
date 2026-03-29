@@ -3,28 +3,29 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "cd functions/generate-place-site && deno run --allow-net --allow-env index.ts",
+    "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "@blinkdotnew/sdk": "2.3.9",
+    "@blinkdotnew/ui": "0.4.0",
     "@react-three/fiber": "^9.5.0",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.0.1",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "react-hook-form": "^7.72.0",
     "react-hot-toast": "^2.6.0",
     "react-responsive": "^10.0.1",
     "recharts": "^3.8.0",
+    "@tanstack/react-query": "^5.95.2",
     "tailwind-merge": "^3.5.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@vercel/deno": "^2.0.0",
     "@vitejs/plugin-react": "5.2.0",
     "autoprefixer": "10.4.16",
     "postcss": "8.4.31",
