@@ -54,17 +54,53 @@ npm run preview
 
 ### Vercel (Recommended)
 
-1. Install Vercel CLI:
-```bash
-npm i -g vercel
-```
+**Frontend & Backend (2 projects):**
 
-2. Deploy:
+1. **Deploy Frontend:**
 ```bash
+cd project-places-site-gen-ghuuphb3-ver-h2p34rb2
+npm install
 vercel --prod
 ```
+Your app will be live at `https://project-places-site-gen-ghuuphb3-ve.vercel.app`
 
-3. Your app will be live at `https://project-places-site-gen-ghuuphb3-ve.vercel.app`
+2. **Deploy Backend API:**
+```bash
+cd project-places-site-gen-ghuuphb3-ver-h2p34rb2/functions/generate-place-site
+vercel --prod
+```
+API will be live at `https://generate-place-site.vercel.app`
+
+3. **Environment Variables:**
+
+Frontend project (`project-places-site-gen-ghuuphb3-ver-h2p34rb2`):
+- `NEXT_PUBLIC_API_URL=https://generate-place-site.vercel.app`
+
+Backend project (`functions/generate-place-site`):
+- `GOOGLE_PLACES_API_KEY` - Google Places API key
+- `BLINK_PROJECT_ID` - Blink project ID
+- `BLINK_SECRET_KEY` - Blink secret key
+
+### Development
+
+1. Copy `.env.example` to `.env.local`:
+```bash
+cp .env.example .env.local
+```
+
+2. Fill in your API keys in `.env.local`
+
+3. Start frontend with dev server:
+```bash
+npm run dev
+```
+
+4. Start API server (separate terminal):
+```bash
+node dev-server.mjs
+```
+
+5. Open http://localhost:3000
 
 ### Manual Deployment
 
