@@ -1,13 +1,77 @@
-# Enhanced Vite React TypeScript Template
+# Places Site Generator
 
-This template includes built-in detection for missing CSS variables between your Tailwind config and CSS files.
+AI-powered places site generator with React, Vite, TypeScript, and Tailwind CSS.
 
 ## Features
 
-- **CSS Variable Detection**: Automatically detects if CSS variables referenced in `tailwind.config.cjs` are defined in `src/index.css`
-- **Enhanced Linting**: Includes ESLint, Stylelint, and custom CSS variable validation
-- **Shadcn/ui**: Pre-configured with all Shadcn components
-- **Modern Stack**: Vite + React + TypeScript + Tailwind CSS
+- 🎨 Beautiful place pages with ratings and reviews
+- 📱 Fully responsive design
+- ✨ Smooth animations with framer-motion
+- 🌟 Star rating system
+- 🎯 Modern UI with Tailwind CSS
+- 📊 React Query for data fetching
+- 🎮 React DnD for drag-and-drop interactions
+
+## Tech Stack
+
+- **Framework**: React 18
+- **Build Tool**: Vite
+- **Language**: TypeScript
+- **Styling**: Tailwind CSS
+- **Animations**: Framer Motion
+- **UI Library**: Lucide React
+- **Form Handling**: React Hook Form + Zod
+- **Charts**: Recharts
+- **Date Handling**: date-fns
+
+## Development
+
+### Installation
+
+```bash
+npm install
+```
+
+### Development Server
+
+```bash
+npm run dev
+```
+
+### Build
+
+```bash
+npm run build
+```
+
+### Preview Production Build
+
+```bash
+npm run preview
+```
+
+## Deployment
+
+### Vercel (Recommended)
+
+1. Install Vercel CLI:
+```bash
+npm i -g vercel
+```
+
+2. Deploy:
+```bash
+vercel --prod
+```
+
+3. Your app will be live at `https://project-places-site-gen-ghuuphb3-ve.vercel.app`
+
+### Manual Deployment
+
+- Push to GitHub
+- Import repository in Vercel dashboard
+- Vercel will automatically detect Vite project
+- Click "Deploy"
 
 ## Available Scripts
 
