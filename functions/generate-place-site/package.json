@@ -1,0 +1,16 @@
+{
+  "name": "generate-place-site",
+  "version": "1.0.0",
+  "description": "Places site generator API",
+  "main": "index.ts",
+  "scripts": {
+    "dev": "deno run --allow-net --allow-env index.ts",
+    "start": "vercel dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@blinkdotnew/sdk": "2.3.9"
+  }
+}

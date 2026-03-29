@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
-import { Zap, Clipboard, ArrowRight, AlertTriangle, CheckCircle, Loader2 } from 'lucide-react'
+import { Zap, Clipboard, ArrowRight, AlertTriangle, CheckCircle, Loader2, Heart, Trash2, Moon } from 'lucide-react'
 import { type PlaceData } from '../App'
 import { GENERATE_FUNCTION_URL } from '../config'
+import { generateCopy, savePlaceResult, listSavedPlaces, deleteSavedPlace } from '../lib/place-utils'
 
 const EXAMPLE_PLACES = [
   { label: 'Eiffel Tower, Paris', url: 'https://www.google.com/maps/place/Eiffel+Tower/@48.8583701,2.2922926,17z' },
@@ -12,8 +13,8 @@ const EXAMPLE_PLACES = [
 const STEPS = [
   'Parsing Maps URL…',
   'Fetching place data from Google…',
-  'Generating AI copy with Claude…',
-  'Building your page…',
+  'Generating copy…',
+  'Building page…',
 ]
 
 type Step = 0 | 1 | 2 | 3
@@ -29,7 +30,16 @@ export default function HomePage({ onGenerate }: Props) {
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const [isMissingKey, setIsMissingKey] = useState(false)
+  const [showSaved, setShowSaved] = useState(false)
+  const [savedPlaces, setSavedPlaces] = useState<any[]>([])
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Load saved places
+  useEffect(() => {
+    const places = listSavedPlaces()
+    setSavedPlaces(places)
+  }, [])
 
   useEffect(() => {
     return () => {
@@ -47,7 +57,7 @@ export default function HomePage({ onGenerate }: Props) {
       } else {
         if (stepTimerRef.current) clearInterval(stepTimerRef.current)
       }
-    }, 2000)
+    }, 1500)
   }
 
   const handleGenerate = async (url?: string) => {
@@ -59,42 +69,117 @@ export default function HomePage({ onGenerate }: Props) {
     setIsLoading(true)
     setCurrentStep(0)
     setCompletedSteps(new Set())
+    setShowSaved(false)
 
     advanceStepsVisually()
 
     try {
-      const response = await fetch(GENERATE_FUNCTION_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mapsUrl }),
-      })
+      // Try API first, fallback to client-side
+      if (GENERATE_FUNCTION_URL) {
+        const response = await fetch(GENERATE_FUNCTION_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mapsUrl }),
+        })
 
-      if (stepTimerRef.current) clearInterval(stepTimerRef.current)
+        if (stepTimerRef.current) clearInterval(stepTimerRef.current)
 
-      const data = await response.json()
+        const data = await response.json()
 
-      if (!response.ok) {
-        if (data?.error === 'MISSING_API_KEY' || data?.code === 'MISSING_API_KEY') {
-          setIsMissingKey(true)
-        } else {
-          setError(data?.message || data?.error || 'Something went wrong. Please try again.')
+        if (!response.ok) {
+          if (data?.error === 'MISSING_API_KEY' || data?.code === 'MISSING_API_KEY') {
+            setIsMissingKey(true)
+          } else {
+            setError(data?.message || data?.error || 'Something went wrong. Please try again.')
+          }
+          setIsLoading(false)
+          return
         }
-        setIsLoading(false)
-        return
-      }
 
-      setCompletedSteps(new Set([0, 1, 2, 3]))
-      setCurrentStep(3)
-      setTimeout(() => {
-        onGenerate(data as PlaceData)
-      }, 400)
-    } catch {
-      if (stepTimerRef.current) clearInterval(stepTimerRef.current)
-      if (!GENERATE_FUNCTION_URL) {
-        setIsMissingKey(true)
+        setCompletedSteps(new Set([0, 1, 2, 3]))
+        setCurrentStep(3)
+        setTimeout(() => {
+          onGenerate(data as PlaceData)
+        }, 400)
       } else {
-        setError('Network error. Please check your connection and try again.')
+        // Client-side fallback
+        if (stepTimerRef.current) clearInterval(stepTimerRef.current)
+
+        // Parse URL
+        const urlInfo = parseMapUrl(mapsUrl)
+        const textQuery = buildTextQuery(urlInfo)
+
+        if (!textQuery) {
+          setError('Could not parse the URL. Please try again.')
+          setIsLoading(false)
+          return
+        }
+
+        // Fetch from Google Places
+        const apiKey = process.env.NEXT_PUBLIC_GOOGLE_PLACES_API_KEY
+        if (!apiKey) {
+          setError('Google Places API key not configured.')
+          setIsLoading(false)
+          return
+        }
+
+        const placesData = await searchPlace(textQuery, apiKey, urlInfo.lat, urlInfo.lng)
+
+        if (!placesData.places || placesData.places.length === 0) {
+          setError('No place found. Please try another URL.')
+          setIsLoading(false)
+          return
+        }
+
+        const rawPlace = placesData.places[0]
+
+        // Generate copy locally
+        const copy = generateCopy(rawPlace)
+
+        // Shape place data
+        const openingHours = rawPlace.currentOpeningHours ?? rawPlace.regularOpeningHours
+        const rawReviews = rawPlace.reviews ?? []
+        const reviews = rawReviews.slice(0, 5).map((r: any) => ({
+          author: r.authorAttribution?.displayName ?? "Anonymous",
+          rating: r.rating ?? null,
+          text: r.text?.text ?? "",
+          relativeTime: r.relativePublishTimeDescription ?? "",
+        }))
+
+        const location = rawPlace.location
+        const place = {
+          name: rawPlace.displayName?.text ?? "",
+          address: rawPlace.formattedAddress ?? "",
+          phone: rawPlace.internationalPhoneNumber ?? "",
+          website: rawPlace.websiteUri ?? "",
+          rating: rawPlace.rating ?? null,
+          totalRatings: rawPlace.userRatingCount ?? 0,
+          priceLevel: rawPlace.priceLevel ?? "N/A",
+          type: rawPlace.primaryTypeDisplayName?.text ?? "",
+          location: location ? { lat: location.latitude ?? null, lng: location.longitude ?? null } : null,
+          hours: openingHours
+            ? {
+                openNow: openingHours.openNow ?? null,
+                periods: openingHours.periods ?? [],
+                weekdayDescriptions: openingHours.weekdayDescriptions ?? [],
+              }
+            : null,
+          photos: [],
+          reviews,
+          googleMapsUri: rawPlace.googleMapsUri ?? "",
+          editorialSummary: rawPlace.editorialSummary?.text ?? "",
+        }
+
+        const result: PlaceData = { place, copy }
+        setCompletedSteps(new Set([0, 1, 2, 3]))
+        setCurrentStep(3)
+        setTimeout(() => {
+          onGenerate(result)
+        }, 400)
       }
+    } catch (err: any) {
+      if (stepTimerRef.current) clearInterval(stepTimerRef.current)
+      setError(err.message || 'Network error. Please try again.')
       setIsLoading(false)
     }
   }
@@ -111,6 +196,19 @@ export default function HomePage({ onGenerate }: Props) {
   const handleExample = (url: string) => {
     setInputValue(url)
     handleGenerate(url)
+  }
+
+  const handleSave = (data: PlaceData, key: string) => {
+    const storageKey = savePlaceResult(data.place, data.copy)
+    setSavedPlaces([...savedPlaces, { place: data.place, copy: data.copy, key: storageKey }])
+    setSelectedKey(storageKey)
+    alert('✅ Saved to your browser!')
+  }
+
+  const handleDelete = (key: string, event: React.MouseEvent) => {
+    event.stopPropagation()
+    deleteSavedPlace(key)
+    setSavedPlaces(savedPlaces.filter(p => p.key !== key))
   }
 
   return (
@@ -134,299 +232,240 @@ export default function HomePage({ onGenerate }: Props) {
             PlaceGen
           </span>
         </div>
-        <a
-          href="https://blink.new"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-xs opacity-50 hover:opacity-80 transition-opacity"
-          style={{ color: 'hsl(var(--foreground))' }}
-        >
-          Made with Blink
-        </a>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowSaved(!showSaved)}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg transition-colors"
+            style={{
+              background: showSaved ? 'hsl(var(--primary))' : 'hsl(var(--muted))',
+              color: showSaved ? 'white' : 'hsl(var(--foreground))',
+            }}
+          >
+            <Heart className="w-4 h-4" />
+            {showSaved ? 'Hide Saved' : `Saved (${savedPlaces.length})`}
+          </button>
+        </div>
       </header>
 
       {/* Main content */}
       <main className="flex-1 flex flex-col items-center justify-center px-6 py-12">
         <div className="w-full max-w-2xl mx-auto text-center">
-
-          {/* Badge */}
-          <div className="inline-flex items-center gap-2 mb-8 animate-fade-in">
-            <span
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold"
-              style={{
-                background: 'hsl(var(--secondary))',
-                color: 'hsl(var(--primary))',
-                border: '1px solid hsl(var(--primary) / 0.2)',
-              }}
-            >
-              <Zap className="w-3 h-3" />
-              AI-Powered Site Generator
-            </span>
-          </div>
-
-          {/* Headline */}
-          <h1
-            className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-tight mb-5 animate-slide-up"
-            style={{
-              fontFamily: 'var(--font-serif)',
-              color: 'hsl(var(--foreground))',
-              animationDelay: '0.05s',
-            }}
-          >
-            One link.{' '}
-            <span style={{ color: 'hsl(var(--primary))' }}>One click.</span>
-            <br />
-            One beautiful website.
-          </h1>
-
-          {/* Subheadline */}
-          <p
-            className="text-lg sm:text-xl mb-10 leading-relaxed animate-slide-up"
-            style={{
-              color: 'hsl(var(--muted-foreground))',
-              fontFamily: 'var(--font-sans)',
-              animationDelay: '0.1s',
-            }}
-          >
-            Paste any Google Maps link and we'll instantly create a stunning
-            landing page for that place.
-          </p>
-
-          {/* Input */}
-          <div className="animate-slide-up" style={{ animationDelay: '0.15s' }}>
-            <div
-              className="relative flex items-center rounded-xl overflow-hidden mb-4 transition-all duration-200"
-              style={{
-                border: '2px solid hsl(var(--border))',
-                background: 'hsl(var(--card))',
-                boxShadow: '0 4px 24px hsl(var(--primary) / 0.06)',
-              }}
-              onFocus={() => {}}
-            >
-              <input
-                type="url"
-                value={inputValue}
-                onChange={e => setInputValue(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleGenerate()}
-                placeholder="https://www.google.com/maps/place/..."
-                disabled={isLoading}
-                className="flex-1 px-5 py-4 text-base bg-transparent outline-none placeholder-opacity-40"
-                style={{
-                  fontFamily: 'var(--font-sans)',
-                  color: 'hsl(var(--foreground))',
-                }}
-                onFocus={e => {
-                  e.currentTarget.parentElement!.style.borderColor = 'hsl(var(--primary))'
-                  e.currentTarget.parentElement!.style.boxShadow = '0 0 0 3px hsl(var(--primary) / 0.15), 0 4px 24px hsl(var(--primary) / 0.1)'
-                }}
-                onBlur={e => {
-                  e.currentTarget.parentElement!.style.borderColor = 'hsl(var(--border))'
-                  e.currentTarget.parentElement!.style.boxShadow = '0 4px 24px hsl(var(--primary) / 0.06)'
-                }}
-              />
-              <button
-                onClick={handlePaste}
-                title="Paste from clipboard"
-                disabled={isLoading}
-                className="px-4 py-4 transition-colors disabled:opacity-40"
-                style={{ color: 'hsl(var(--muted-foreground))' }}
-                onMouseEnter={e => (e.currentTarget.style.color = 'hsl(var(--primary))')}
-                onMouseLeave={e => (e.currentTarget.style.color = 'hsl(var(--muted-foreground))')}
-              >
-                <Clipboard className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Generate button */}
-            <button
-              onClick={() => handleGenerate()}
-              disabled={isLoading || !inputValue.trim()}
-              className="w-full py-4 px-8 rounded-xl font-semibold text-base flex items-center justify-center gap-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{
-                background: isLoading ? 'hsl(var(--primary) / 0.7)' : 'hsl(var(--primary))',
-                color: 'hsl(var(--primary-foreground))',
-                fontFamily: 'var(--font-sans)',
-                boxShadow: isLoading ? 'none' : '0 4px 16px hsl(var(--primary) / 0.35)',
-                transform: 'translateY(0)',
-              }}
-              onMouseEnter={e => {
-                if (!isLoading && inputValue.trim()) {
-                  e.currentTarget.style.transform = 'translateY(-1px)'
-                  e.currentTarget.style.boxShadow = '0 6px 24px hsl(var(--primary) / 0.4)'
-                }
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.transform = 'translateY(0)'
-                e.currentTarget.style.boxShadow = '0 4px 16px hsl(var(--primary) / 0.35)'
-              }}
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Generating…
-                </>
-              ) : (
-                <>
-                  Generate Site
-                  <ArrowRight className="w-5 h-5" />
-                </>
-              )}
-            </button>
-
-            <p
-              className="mt-3 text-xs text-center"
-              style={{ color: 'hsl(var(--muted-foreground))' }}
-            >
-              Powered by Google Places API + Claude AI
-            </p>
-          </div>
-
-          {/* Loading steps */}
-          {isLoading && (
-            <div
-              className="mt-8 p-5 rounded-xl text-left animate-fade-in"
-              style={{
-                background: 'hsl(var(--secondary))',
-                border: '1px solid hsl(var(--border))',
-              }}
-            >
+          {showSaved && savedPlaces.length > 0 ? (
+            <div className="space-y-4">
+              <h2 className="text-2xl font-bold mb-6" style={{ color: 'hsl(var(--foreground))' }}>
+                Your Saved Places
+              </h2>
               <div className="space-y-3">
-                {STEPS.map((step, i) => {
-                  const isCompleted = completedSteps.has(i)
-                  const isActive = currentStep === i && !isCompleted
-                  return (
-                    <div key={i} className="flex items-center gap-3">
-                      <div className="w-5 h-5 flex-shrink-0 flex items-center justify-center">
-                        {isCompleted ? (
-                          <CheckCircle className="w-5 h-5" style={{ color: 'hsl(var(--primary))' }} />
-                        ) : isActive ? (
-                          <Loader2 className="w-5 h-5 animate-spin" style={{ color: 'hsl(var(--primary))' }} />
-                        ) : (
-                          <div
-                            className="w-5 h-5 rounded-full border-2"
-                            style={{ borderColor: 'hsl(var(--border))' }}
-                          />
-                        )}
-                      </div>
-                      <span
-                        className="text-sm font-medium"
-                        style={{
-                          color: isCompleted
-                            ? 'hsl(var(--primary))'
-                            : isActive
-                            ? 'hsl(var(--foreground))'
-                            : 'hsl(var(--muted-foreground))',
-                        }}
-                      >
-                        [{i + 1}] {step}
-                        {isCompleted && ' ✓'}
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Missing API key error */}
-          {isMissingKey && (
-            <div
-              className="mt-6 p-5 rounded-xl text-left animate-fade-in"
-              style={{
-                background: 'hsl(45 100% 97%)',
-                border: '1px solid hsl(45 90% 75%)',
-              }}
-            >
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: 'hsl(45 90% 45%)' }} />
-                <div>
-                  <p className="font-semibold text-sm mb-2" style={{ color: 'hsl(25 30% 20%)' }}>
-                    Setup required — Google Places API key needed
-                  </p>
-                  <p className="text-sm mb-3" style={{ color: 'hsl(25 20% 35%)' }}>
-                    To generate sites, add your Google Places API key as a project secret:
-                  </p>
-                  <ol className="text-sm space-y-2 list-decimal list-inside" style={{ color: 'hsl(25 20% 35%)' }}>
-                    <li>Get a free key at <a href="https://console.cloud.google.com/apis/library/places-backend.googleapis.com" target="_blank" rel="noopener noreferrer" className="underline font-medium">Google Cloud Console</a> (enable <em>Places API New</em>)</li>
-                    <li>In Blink, go to <strong>Workspace → Secrets</strong> and add:<br /><code className="px-1 py-0.5 rounded text-xs" style={{ background: 'hsl(45 80% 88%)' }}>GOOGLE_PLACES_API_KEY</code> = your key</li>
-                    <li>The edge function will redeploy automatically with the new secret</li>
-                  </ol>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Generic error */}
-          {error && !isMissingKey && (
-            <div
-              className="mt-6 p-4 rounded-xl flex items-start gap-3 animate-fade-in"
-              style={{
-                background: 'hsl(0 100% 97%)',
-                border: '1px solid hsl(0 80% 85%)',
-              }}
-            >
-              <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: 'hsl(0 80% 55%)' }} />
-              <p className="text-sm" style={{ color: 'hsl(0 40% 30%)' }}>{error}</p>
-            </div>
-          )}
-
-          {/* Example chips */}
-          {!isLoading && (
-            <div className="mt-10 animate-slide-up" style={{ animationDelay: '0.2s' }}>
-              <p
-                className="text-sm mb-3"
-                style={{ color: 'hsl(var(--muted-foreground))', fontFamily: 'var(--font-sans)' }}
-              >
-                Try with:
-              </p>
-              <div className="flex flex-wrap justify-center gap-2">
-                {EXAMPLE_PLACES.map(place => (
+                {savedPlaces.map((item) => (
                   <button
-                    key={place.label}
-                    onClick={() => handleExample(place.url)}
-                    disabled={isLoading}
-                    className="px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 disabled:opacity-50"
+                    key={item.key}
+                    onClick={() => {
+                      setSelectedKey(item.key)
+                      onGenerate(item as any)
+                    }}
+                    className="w-full p-4 rounded-xl text-left transition-all hover:scale-[1.02]"
                     style={{
                       background: 'hsl(var(--card))',
-                      color: 'hsl(var(--foreground))',
                       border: '1px solid hsl(var(--border))',
-                      fontFamily: 'var(--font-sans)',
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.background = 'hsl(var(--secondary))'
-                      e.currentTarget.style.borderColor = 'hsl(var(--primary) / 0.4)'
-                      e.currentTarget.style.color = 'hsl(var(--primary))'
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.background = 'hsl(var(--card))'
-                      e.currentTarget.style.borderColor = 'hsl(var(--border))'
-                      e.currentTarget.style.color = 'hsl(var(--foreground))'
                     }}
                   >
-                    {place.label}
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="font-semibold mb-1" style={{ color: 'hsl(var(--foreground))' }}>
+                          {item.place.name}
+                        </h3>
+                        <p className="text-sm" style={{ color: 'hsl(var(--muted-foreground))' }}>
+                          {item.place.address}
+                        </p>
+                      </div>
+                      <button
+                        onClick={(e) => handleDelete(item.key, e)}
+                        className="flex-shrink-0 p-2 rounded-lg hover:bg-red-100 transition-colors"
+                        style={{ color: 'hsl(var(--destructive))' }}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </button>
                 ))}
               </div>
+              <button
+                onClick={() => setShowSaved(false)}
+                className="w-full mt-4 px-4 py-2 text-sm font-medium rounded-lg transition-colors"
+                style={{
+                  background: 'hsl(var(--muted))',
+                  color: 'hsl(var(--foreground))',
+                }}
+              >
+                Continue Generating
+              </button>
             </div>
+          ) : (
+            <>
+              <h1 className="text-3xl md:text-4xl font-bold mb-3" style={{ color: 'hsl(var(--foreground))' }}>
+                Generate Place Pages
+              </h1>
+              <p className="text-sm mb-8" style={{ color: 'hsl(var(--muted-foreground))' }}>
+                Paste a Google Maps URL and get a beautiful landing page in seconds
+              </p>
+
+              <div className="space-y-3">
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    placeholder="Paste Google Maps URL here..."
+                    className="w-full px-4 py-3 pr-24 rounded-xl border-none focus:ring-2 transition-all"
+                    style={{
+                      background: 'hsl(var(--card))',
+                      color: 'hsl(var(--foreground))',
+                      fontSize: '16px',
+                    }}
+                  />
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1">
+                    <button
+                      onClick={handlePaste}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+                      style={{
+                        background: 'hsl(var(--muted))',
+                        color: 'hsl(var(--foreground))',
+                      }}
+                    >
+                      Paste
+                    </button>
+                    <button
+                      onClick={() => handleGenerate()}
+                      disabled={!inputValue.trim() || isLoading}
+                      className="px-4 py-1.5 text-xs font-medium rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      style={{
+                        background: isLoading ? 'hsl(var(--muted))' : 'hsl(var(--primary))',
+                        color: isLoading ? 'hsl(var(--muted-foreground))' : 'white',
+                      }}
+                    >
+                      {isLoading ? (
+                        <>
+                          <Loader2 className="w-3 h-3 inline mr-1 animate-spin" />
+                          Generating
+                        </>
+                      ) : (
+                        'Generate'
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="p-3 rounded-lg text-sm" style={{ background: 'hsl(var(--destructive/0.1))', color: 'hsl(var(--destructive))' }}>
+                    <AlertTriangle className="w-4 h-4 inline mr-2" />
+                    {error}
+                  </div>
+                )}
+
+                {isMissingKey && (
+                  <div className="p-3 rounded-lg text-sm" style={{ background: 'hsl(var(--primary/0.1))', color: 'hsl(var(--primary))' }}>
+                    <AlertTriangle className="w-4 h-4 inline mr-2" />
+                    Google Places API key not configured. Use API mode for full features.
+                  </div>
+                )}
+
+                <div className="pt-4 border-t" style={{ borderColor: 'hsl(var(--border))' }}>
+                  <p className="text-xs mb-2 font-medium" style={{ color: 'hsl(var(--muted-foreground))' }}>
+                    Examples:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {EXAMPLE_PLACES.map((example) => (
+                      <button
+                        key={example.url}
+                        onClick={() => handleExample(example.url)}
+                        className="px-3 py-1.5 text-xs rounded-lg transition-colors"
+                        style={{
+                          background: 'hsl(var(--muted))',
+                          color: 'hsl(var(--foreground))',
+                        }}
+                      >
+                        {example.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Loading Steps */}
+              {isLoading && (
+                <div className="mt-8 w-full max-w-md mx-auto">
+                  <div className="flex items-center justify-center gap-2 mb-4">
+                    <Loader2 className="w-5 h-5 animate-spin" style={{ color: 'hsl(var(--primary))' }} />
+                    <span className="font-medium" style={{ color: 'hsl(var(--foreground))' }}>
+                      {STEPS[currentStep]}
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${((completedSteps.size) / 3) * 100}%`,
+                        background: 'hsl(var(--primary))',
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       </main>
 
       {/* Footer */}
-      <footer className="py-6 text-center">
+      <footer className="w-full px-6 py-4 text-center" style={{ borderColor: 'hsl(var(--border))' }}>
         <p className="text-xs" style={{ color: 'hsl(var(--muted-foreground))' }}>
-          Made with{' '}
-          <a
-            href="https://blink.new"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:no-underline"
-            style={{ color: 'hsl(var(--primary))' }}
-          >
-            Blink
-          </a>
+          Data saved locally in your browser • No database needed
         </p>
       </footer>
     </div>
   )
+}
+
+// Helper functions for URL parsing
+function parseMapUrl(rawUrl: string) {
+  try {
+    const parsed = new URL(rawUrl)
+    const q = parsed.searchParams.get('q')
+    if (q) {
+      const coordsMatch = q.match(/^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$/)
+      if (coordsMatch) {
+        return { placeName: null, lat: parseFloat(coordsMatch[1]), lng: parseFloat(coordsMatch[2]), searchQuery: null }
+      }
+      return { placeName: null, lat: null, lng: null, searchQuery: q }
+    }
+    const pathname = parsed.pathname
+    const placeMatch = pathname.match(/\/maps\/place\/([^/@]+)/)
+    if (placeMatch) return { placeName: decodeURIComponent(placeMatch[1].replace(/\+/g, ' ')), lat: null, lng: null, searchQuery: null }
+    const coordMatch = pathname.match(/@(-?\d+\.?\d+),(-?\d+\.?\d+)/)
+    if (coordMatch) return { placeName: null, lat: parseFloat(coordMatch[1]), lng: parseFloat(coordMatch[2]), searchQuery: null }
+    return { placeName: null, lat: null, lng: null, searchQuery: rawUrl }
+  } catch {
+    return { placeName: null, lat: null, lng: null, searchQuery: rawUrl }
+  }
+}
+
+function buildTextQuery(info: any) {
+  if (info.placeName) return info.placeName
+  if (info.searchQuery) return info.searchQuery
+  if (info.lat !== null && info.lng !== null) return `${info.lat},${info.lng}`
+  return ""
+}
+
+async function searchPlace(query: string, apiKey: string, lat?: number | null, lng?: number | null) {
+  const body = { textQuery: query }
+  if (lat != null && lng != null) {
+    body.locationBias = { circle: { center: { latitude: lat, longitude: lng }, radius: 500 } }
+  }
+  const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Goog-Api-Key": apiKey, "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.currentOpeningHours,places.regularOpeningHours,places.internationalPhoneNumber,places.websiteUri,places.photos,places.priceLevel,places.primaryTypeDisplayName,places.editorialSummary,places.reviews,places.googleMapsUri" },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json()
+  return data
 }
