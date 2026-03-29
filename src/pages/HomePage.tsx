@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Zap, Clipboard, ArrowRight, AlertTriangle, CheckCircle, Loader2, Heart, Trash2, Moon } from 'lucide-react'
 import { type PlaceData } from '../App'
-import { GENERATE_FUNCTION_URL } from '../config'
-import { generateCopy, savePlaceResult, listSavedPlaces, deleteSavedPlace } from '../lib/place-utils'
+import { generateCopy, savePlaceResult, listSavedPlaces, deleteSavedPlace, resolvePhotoUrl, formatPriceLevel } from '../lib/place-utils'
 
 const EXAMPLE_PLACES = [
   { label: 'Eiffel Tower, Paris', url: 'https://www.google.com/maps/place/Eiffel+Tower/@48.8583701,2.2922926,17z' },
@@ -29,7 +28,6 @@ export default function HomePage({ onGenerate }: Props) {
   const [currentStep, setCurrentStep] = useState<Step>(0)
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set())
   const [error, setError] = useState<string | null>(null)
-  const [isMissingKey, setIsMissingKey] = useState(false)
   const [showSaved, setShowSaved] = useState(false)
   const [savedPlaces, setSavedPlaces] = useState<any[]>([])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
@@ -65,7 +63,6 @@ export default function HomePage({ onGenerate }: Props) {
     if (!mapsUrl.trim()) return
 
     setError(null)
-    setIsMissingKey(false)
     setIsLoading(true)
     setCurrentStep(0)
     setCompletedSteps(new Set())
@@ -74,109 +71,100 @@ export default function HomePage({ onGenerate }: Props) {
     advanceStepsVisually()
 
     try {
-      // Try API first, fallback to client-side
-      if (GENERATE_FUNCTION_URL) {
-        const response = await fetch(GENERATE_FUNCTION_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mapsUrl }),
-        })
+      if (stepTimerRef.current) clearInterval(stepTimerRef.current)
 
-        if (stepTimerRef.current) clearInterval(stepTimerRef.current)
-
-        const data = await response.json()
-
-        if (!response.ok) {
-          if (data?.error === 'MISSING_API_KEY' || data?.code === 'MISSING_API_KEY') {
-            setIsMissingKey(true)
-          } else {
-            setError(data?.message || data?.error || 'Something went wrong. Please try again.')
-          }
-          setIsLoading(false)
-          return
-        }
-
-        setCompletedSteps(new Set([0, 1, 2, 3]))
-        setCurrentStep(3)
-        setTimeout(() => {
-          onGenerate(data as PlaceData)
-        }, 400)
-      } else {
-        // Client-side fallback
-        if (stepTimerRef.current) clearInterval(stepTimerRef.current)
-
-        // Parse URL
-        const urlInfo = parseMapUrl(mapsUrl)
-        const textQuery = buildTextQuery(urlInfo)
-
-        if (!textQuery) {
-          setError('Could not parse the URL. Please try again.')
-          setIsLoading(false)
-          return
-        }
-
-        // Fetch from Google Places
-        const apiKey = process.env.NEXT_PUBLIC_GOOGLE_PLACES_API_KEY
-        if (!apiKey) {
-          setError('Google Places API key not configured.')
-          setIsLoading(false)
-          return
-        }
-
-        const placesData = await searchPlace(textQuery, apiKey, urlInfo.lat, urlInfo.lng)
-
-        if (!placesData.places || placesData.places.length === 0) {
-          setError('No place found. Please try another URL.')
-          setIsLoading(false)
-          return
-        }
-
-        const rawPlace = placesData.places[0]
-
-        // Generate copy locally
-        const copy = generateCopy(rawPlace)
-
-        // Shape place data
-        const openingHours = rawPlace.currentOpeningHours ?? rawPlace.regularOpeningHours
-        const rawReviews = rawPlace.reviews ?? []
-        const reviews = rawReviews.slice(0, 5).map((r: any) => ({
-          author: r.authorAttribution?.displayName ?? "Anonymous",
-          rating: r.rating ?? null,
-          text: r.text?.text ?? "",
-          relativeTime: r.relativePublishTimeDescription ?? "",
-        }))
-
-        const location = rawPlace.location
-        const place = {
-          name: rawPlace.displayName?.text ?? "",
-          address: rawPlace.formattedAddress ?? "",
-          phone: rawPlace.internationalPhoneNumber ?? "",
-          website: rawPlace.websiteUri ?? "",
-          rating: rawPlace.rating ?? null,
-          totalRatings: rawPlace.userRatingCount ?? 0,
-          priceLevel: rawPlace.priceLevel ?? "N/A",
-          type: rawPlace.primaryTypeDisplayName?.text ?? "",
-          location: location ? { lat: location.latitude ?? null, lng: location.longitude ?? null } : null,
-          hours: openingHours
-            ? {
-                openNow: openingHours.openNow ?? null,
-                periods: openingHours.periods ?? [],
-                weekdayDescriptions: openingHours.weekdayDescriptions ?? [],
-              }
-            : null,
-          photos: [],
-          reviews,
-          googleMapsUri: rawPlace.googleMapsUri ?? "",
-          editorialSummary: rawPlace.editorialSummary?.text ?? "",
-        }
-
-        const result: PlaceData = { place, copy }
-        setCompletedSteps(new Set([0, 1, 2, 3]))
-        setCurrentStep(3)
-        setTimeout(() => {
-          onGenerate(result)
-        }, 400)
+      // Get API key
+      const apiKey = (import.meta as any).env?.VITE_GOOGLE_PLACES_API_KEY
+      if (!apiKey) {
+        setError('Google Places API key not configured.')
+        setIsLoading(false)
+        return
       }
+
+      // Resolve short URLs (skip if it fails — Google Places can search by coordinates anyway)
+      let resolvedUrl = mapsUrl.trim()
+      if (resolvedUrl.includes('maps.app.goo.gl')) {
+        try {
+          resolvedUrl = await resolveUrl(resolvedUrl)
+        } catch {
+          // CORS error on short URLs is expected in browser — skip resolution
+          // Google Places API can still search using other extracted data
+        }
+      }
+
+      // Parse URL
+      const urlInfo = parseMapUrl(resolvedUrl)
+      const textQuery = buildTextQuery(urlInfo)
+
+      if (!textQuery) {
+        setError('Could not parse the URL. Please try again.')
+        setIsLoading(false)
+        return
+      }
+
+      // Fetch from Google Places
+      const placesData = await searchPlace(textQuery, apiKey, urlInfo.lat, urlInfo.lng)
+
+      if (!placesData.places || placesData.places.length === 0) {
+        setError('No place found. Please try another URL.')
+        setIsLoading(false)
+        return
+      }
+
+      const rawPlace = placesData.places[0]
+
+      // Resolve photos in parallel
+      const rawPhotos = rawPlace.photos ?? []
+      const photoUrls: string[] = []
+      const photoPromises = rawPhotos.slice(0, 5).map(async (photo: any) => {
+        const url = await resolvePhotoUrl(photo.name, apiKey)
+        if (url) photoUrls.push(url)
+      })
+      await Promise.all(photoPromises)
+
+      // Generate copy locally
+      const copy = generateCopy(rawPlace)
+
+      // Shape place data
+      const openingHours = rawPlace.currentOpeningHours ?? rawPlace.regularOpeningHours
+      const rawReviews = rawPlace.reviews ?? []
+      const reviews = rawReviews.slice(0, 5).map((r: any) => ({
+        author: r.authorAttribution?.displayName ?? 'Anonymous',
+        rating: r.rating ?? null,
+        text: r.text?.text ?? '',
+        relativeTime: r.relativePublishTimeDescription ?? '',
+      }))
+
+      const location = rawPlace.location
+      const place = {
+        name: rawPlace.displayName?.text ?? '',
+        address: rawPlace.formattedAddress ?? '',
+        phone: rawPlace.internationalPhoneNumber ?? '',
+        website: rawPlace.websiteUri ?? '',
+        rating: rawPlace.rating ?? null,
+        totalRatings: rawPlace.userRatingCount ?? 0,
+        priceLevel: formatPriceLevel(rawPlace.priceLevel),
+        type: rawPlace.primaryTypeDisplayName?.text ?? '',
+        location: location ? { lat: location.latitude ?? null, lng: location.longitude ?? null } : null,
+        hours: openingHours
+          ? {
+              openNow: openingHours.openNow ?? null,
+              periods: openingHours.periods ?? [],
+              weekdayDescriptions: openingHours.weekdayDescriptions ?? [],
+            }
+          : null,
+        photos: photoUrls,
+        reviews,
+        googleMapsUri: rawPlace.googleMapsUri ?? '',
+        editorialSummary: rawPlace.editorialSummary?.text ?? '',
+      }
+
+      const result: PlaceData = { place, copy }
+      setCompletedSteps(new Set([0, 1, 2, 3]))
+      setCurrentStep(3)
+      setTimeout(() => {
+        onGenerate(result)
+      }, 400)
     } catch (err: any) {
       if (stepTimerRef.current) clearInterval(stepTimerRef.current)
       setError(err.message || 'Network error. Please try again.')
@@ -362,13 +350,6 @@ export default function HomePage({ onGenerate }: Props) {
                   </div>
                 )}
 
-                {isMissingKey && (
-                  <div className="p-3 rounded-lg text-sm" style={{ background: 'hsl(var(--primary/0.1))', color: 'hsl(var(--primary))' }}>
-                    <AlertTriangle className="w-4 h-4 inline mr-2" />
-                    Google Places API key not configured. Use API mode for full features.
-                  </div>
-                )}
-
                 <div className="pt-4 border-t" style={{ borderColor: 'hsl(var(--border))' }}>
                   <p className="text-xs mb-2 font-medium" style={{ color: 'hsl(var(--muted-foreground))' }}>
                     Examples:
@@ -426,46 +407,119 @@ export default function HomePage({ onGenerate }: Props) {
   )
 }
 
-// Helper functions for URL parsing
+// Helper functions for URL parsing and Places API
+// Note: Short URL resolution (maps.app.goo.gl) may fail due to CORS in browser
+// Google Places API can still search using other extracted data (name, coords)
+async function resolveUrl(url: string): Promise<string> {
+  if (!url.includes('maps.app.goo.gl')) return url
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10_000)
+    try {
+      const res = await fetch(url, { redirect: 'follow', signal: controller.signal })
+      clearTimeout(timer)
+      return res.url
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch (err) {
+    // CORS or timeout — return original URL, Google Places will search by other means
+    throw err
+  }
+}
+
+function extractPlaceIdFromData(data: string): string | null {
+  const decoded = decodeURIComponent(data)
+  const chijMatch = decoded.match(/!1s(ChIJ[^!]+)!/)
+  if (chijMatch) return chijMatch[1]
+  const hexMatch = decoded.match(/!1s(0x[0-9a-fA-F:]+)!/)
+  if (hexMatch) return hexMatch[1]
+  return null
+}
+
 function parseMapUrl(rawUrl: string) {
   try {
     const parsed = new URL(rawUrl)
+    const result: any = { placeName: null, lat: null, lng: null, placeId: null, searchQuery: null }
+
     const q = parsed.searchParams.get('q')
     if (q) {
       const coordsMatch = q.match(/^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$/)
       if (coordsMatch) {
-        return { placeName: null, lat: parseFloat(coordsMatch[1]), lng: parseFloat(coordsMatch[2]), searchQuery: null }
+        result.lat = parseFloat(coordsMatch[1])
+        result.lng = parseFloat(coordsMatch[2])
+      } else {
+        result.searchQuery = q
       }
-      return { placeName: null, lat: null, lng: null, searchQuery: q }
     }
+
     const pathname = parsed.pathname
     const placeMatch = pathname.match(/\/maps\/place\/([^/@]+)/)
-    if (placeMatch) return { placeName: decodeURIComponent(placeMatch[1].replace(/\+/g, ' ')), lat: null, lng: null, searchQuery: null }
+    if (placeMatch) {
+      result.placeName = decodeURIComponent(placeMatch[1].replace(/\+/g, ' '))
+    }
+
     const coordMatch = pathname.match(/@(-?\d+\.?\d+),(-?\d+\.?\d+)/)
-    if (coordMatch) return { placeName: null, lat: parseFloat(coordMatch[1]), lng: parseFloat(coordMatch[2]), searchQuery: null }
-    return { placeName: null, lat: null, lng: null, searchQuery: rawUrl }
+    if (coordMatch) {
+      result.lat = parseFloat(coordMatch[1])
+      result.lng = parseFloat(coordMatch[2])
+    }
+
+    const dataSegment = pathname.match(/\/data=([^?#]+)/)
+    if (dataSegment) {
+      const pid = extractPlaceIdFromData(dataSegment[1])
+      if (pid) result.placeId = pid
+    }
+
+    const dataParam = parsed.searchParams.get('data')
+    if (dataParam && !result.placeId) {
+      const pid = extractPlaceIdFromData(dataParam)
+      if (pid) result.placeId = pid
+    }
+
+    return result
   } catch {
-    return { placeName: null, lat: null, lng: null, searchQuery: rawUrl }
+    return { placeName: null, lat: null, lng: null, placeId: null, searchQuery: rawUrl }
   }
 }
 
-function buildTextQuery(info: any) {
+function buildTextQuery(info: any): string {
+  if (info.placeName && info.lat !== null && info.lng !== null) return info.placeName
   if (info.placeName) return info.placeName
   if (info.searchQuery) return info.searchQuery
   if (info.lat !== null && info.lng !== null) return `${info.lat},${info.lng}`
-  return ""
+  return ''
 }
 
+const FIELD_MASK = [
+  'places.id', 'places.displayName', 'places.formattedAddress', 'places.location',
+  'places.rating', 'places.userRatingCount', 'places.currentOpeningHours',
+  'places.regularOpeningHours', 'places.internationalPhoneNumber', 'places.websiteUri',
+  'places.photos', 'places.priceLevel', 'places.primaryTypeDisplayName',
+  'places.editorialSummary', 'places.reviews', 'places.googleMapsUri',
+].join(',')
+
 async function searchPlace(query: string, apiKey: string, lat?: number | null, lng?: number | null) {
-  const body = { textQuery: query }
+  const body: any = { textQuery: query }
   if (lat != null && lng != null) {
     body.locationBias = { circle: { center: { latitude: lat, longitude: lng }, radius: 500 } }
   }
-  const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Goog-Api-Key": apiKey, "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.currentOpeningHours,places.regularOpeningHours,places.internationalPhoneNumber,places.websiteUri,places.photos,places.priceLevel,places.primaryTypeDisplayName,places.editorialSummary,places.reviews,places.googleMapsUri" },
-    body: JSON.stringify(body),
-  })
-  const data = await res.json()
-  return data
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 10_000)
+  try {
+    const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': apiKey, 'X-Goog-FieldMask': FIELD_MASK },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+    clearTimeout(timer)
+    if (!res.ok) {
+      const errText = await res.text()
+      throw new Error(`Places API error ${res.status}: ${errText}`)
+    }
+    return res.json()
+  } finally {
+    clearTimeout(timer)
+  }
 }

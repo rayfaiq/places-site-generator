@@ -1,3 +1,35 @@
+// Format price level enum to symbol
+export function formatPriceLevel(level?: string): string {
+  if (!level) return 'N/A'
+  const map: Record<string, string> = {
+    'PRICE_LEVEL_FREE': 'Free',
+    'PRICE_LEVEL_INEXPENSIVE': '$',
+    'PRICE_LEVEL_MODERATE': '$$',
+    'PRICE_LEVEL_EXPENSIVE': '$$$',
+    'PRICE_LEVEL_VERY_EXPENSIVE': '$$$$',
+  }
+  return map[level] ?? level
+}
+
+// Resolve Google Places photo URL
+export async function resolvePhotoUrl(photoName: string, apiKey: string): Promise<string | null> {
+  try {
+    const url = `https://places.googleapis.com/v1/${photoName}/media?maxHeightPx=800&maxWidthPx=1200&key=${apiKey}&skipHttpRedirect=false`
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10_000)
+    try {
+      const res = await fetch(url, { redirect: 'follow', signal: controller.signal })
+      clearTimeout(timer)
+      if (!res.ok) return null
+      return res.url
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    return null
+  }
+}
+
 // Simple client-side copy generator (no API needed)
 export async function generateCopy(
   place: any,

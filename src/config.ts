@@ -1,2 +1,2 @@
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const GENERATE_FUNCTION_URL = (import.meta as any).env?.VITE_GENERATE_FUNCTION_URL || '/api/generate'
+// Configuration is handled via environment variables
+// VITE_GOOGLE_PLACES_API_KEY - required for Google Places API access
