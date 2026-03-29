@@ -5,11 +5,5 @@
       "source": "/api/:path*",
       "destination": "https://generate-place-site.vercel.app/:path*"
     }
-  ],
-  "functions": {
-    "functions/generate-place-site/index.ts": {
-      "memory": 1024,
-      "maxDuration": 30
-    }
-  }
+  ]
 }
